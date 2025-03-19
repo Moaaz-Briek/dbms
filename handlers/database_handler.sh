@@ -30,5 +30,31 @@ connect_to_database() {
 }
 
 drop_database() {
-    echo ""
+    show_header "Drop Database"
+
+    read -p "Enter database name: " db_name
+
+    # Check if database exists
+    if [ ! -d "$DATA_DIR/$db_name" ]; then
+        display_message "Database '$db_name' does not exist." "$RED"
+        return
+    fi
+
+    read -p "Are you sure you want to drop '$db_name'? (y/n): " confirm
+
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        rm -rf "$DATA_DIR/$db_name"
+
+        if [ $? -eq 0 ]; then
+            # Reset current DB if we deleted the one we were connected to
+            if [ "$CURRENT_DB" = "$db_name" ]; then
+                CURRENT_DB=""
+            fi
+            display_message "Database '$db_name' dropped successfully." "$GREEN"
+        else
+            display_message "Failed to drop database '$db_name'." "$RED"
+        fi
+    else
+        display_message "Database drop cancelled." "$YELLOW"
+    fi
 }
