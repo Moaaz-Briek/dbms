@@ -22,11 +22,39 @@ list_databases() {
 }
 
 create_database() {
-    echo ""
+    show_header "Create Database"
+    
+    read -p "Enter database name: " db_name
+
+    # Check if database already exists
+    if [ -d "$DATA_DIR/$db_name" ]; then
+        display_message "Database '$db_name' already exists." "$RED"
+        return
+    fi
+
+    mkdir "$DATA_DIR/$db_name"
+
+    if [ $? -eq 0 ]; then
+        display_message "Database '$db_name' created successfully." "$GREEN"
+    else
+        display_message "Failed to create database '$db_name'." "$RED"
+    fi
 }
 
 connect_to_database() {
-    echo ""
+    show_header "Connect to Database"
+
+    read -p "Enter database name: " db_name
+
+    # Check if database exists
+    if [ ! -d "$DATA_DIR/$db_name" ]; then
+        display_message "Database '$db_name' does not exist." "$RED"
+        return
+    fi
+
+    CURRENT_DB=$db_name
+    display_message "Connected to database '$db_name'." "$GREEN"
+    database_menu
 }
 
 drop_database() {
