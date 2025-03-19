@@ -22,3 +22,5 @@ source "$SCRIPT_DIR/handlers/table_handler.sh"
 source "$SCRIPT_DIR/handlers/data_handler.sh"
 source "$SCRIPT_DIR/menus/main_menu.sh"
 source "$SCRIPT_DIR/menus/database_menu.sh"
+
+main_menu
