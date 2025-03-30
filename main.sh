@@ -15,6 +15,7 @@ mkdir -p "$DATA_DIR"
 # Source common utilities and configurations
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/utils.sh"
+source "$SCRIPT_DIR/handlers/utils.sh"
 
 # Source menu handlers
 source "$SCRIPT_DIR/handlers/database_handler.sh"
