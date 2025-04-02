@@ -1,5 +1,4 @@
 #!/bin/bash
-
 function select_from_table() {
     show_header "Select Data from Table"
 
@@ -10,10 +9,12 @@ function select_from_table() {
 
     read -p "Enter table name: " table_name
 
+    # Use the find_table function to locate the table
     if ! find_table "$table_name"; then
         display_message "Table '$table_name' does not exist in database '$CURRENT_DB'." "$RED"
         return
     fi
+
 
     if [ ! -f "$METADATA_PATH" ]; then
         display_message "Table metadata not found. Using default display." "$YELLOW"
@@ -139,9 +140,6 @@ function select_from_table() {
     echo ""
     read -p "Press Enter to continue..."
 }
-
-
-
 
 function update_table() {
     show_header "Update Table Data"
@@ -285,7 +283,6 @@ function update_table() {
         display_message "No matching rows found. No updates made." "$YELLOW"
     fi
 }
-
 
 insert_into_table() {
     show_header "Insert Data into Table in Database '$CURRENT_DB'"
