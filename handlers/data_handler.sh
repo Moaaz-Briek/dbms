@@ -15,13 +15,11 @@ function select_from_table() {
         return
     fi
 
-    # Check if metadata exists
+
     if [ ! -f "$METADATA_PATH" ]; then
         display_message "Table metadata not found. Using default display." "$YELLOW"
-        # If no metadata, use first line as header
         header=$(head -n 1 "$TABLE_PATH" 2>/dev/null || echo "Data")
     else
-        # Get column names from metadata
         header=$(get_column_names "$METADATA_PATH")
         if [ $? -ne 0 ]; then
             display_message "Could not read column names from metadata." "$RED"
@@ -29,45 +27,118 @@ function select_from_table() {
         fi
     fi
 
+    echo -e "\n${YELLOW}Columns in table '$table_name':${NC}"
+    display_columns "$header"
+
+    read -p "Select specific columns? (comma-separated, or * for all): " selected_cols
     read -p "Use conditions? (y/n): " use_condition
 
-    if [ "$use_condition" = "y" ] || [ "$use_condition" = "Y" ]; then
-        # Display available columns
-        echo -e "\n${YELLOW}Columns in table '$table_name':${NC}"
-        display_columns "$header"
+    temp_file=$(mktemp)
+    cp "$TABLE_PATH" "$temp_file"
 
-        read -p "Enter column name: " column_name
-        read -p "Enter value to match: " value
+    # Check if the entered columns exist in the table
+    if [ "$selected_cols" != "*" ]; then
+        IFS=',' read -ra cols <<< "$selected_cols"
+        invalid_columns=()
+        for col in "${cols[@]}"; do
+            # Trim extra spaces around the column names
+            col_trimmed=$(echo "$col" | xargs)  # Trim spaces
+            col_index=$(get_column_index "$col_trimmed" "$header")
+            if [ "$col_index" -lt 0 ]; then
+                invalid_columns+=("$col_trimmed")
+            fi
+        done
 
-        # Get column index from metadata
-        col_index=$(get_column_index "$column_name" "$header")
-
-        if [ "$col_index" -eq -1 ]; then
-            display_message "Column '$column_name' not found in table '$table_name'." "$RED"
+        # If there are invalid columns, show a message and return
+        if [ ${#invalid_columns[@]} -gt 0 ]; then
+            display_message "The following columns do not exist: ${invalid_columns[*]}" "$RED"
             return
         fi
 
-        echo -e "\n${YELLOW}Query Results:${NC}"
-
-        # Get matching data using awk
-        # Note: awk uses 1-based indexing for fields, so we add 1 to col_index
-        filtered_data=$(awk -F':' -v col="$((col_index+1))" -v val="$value" '$col == val' "$TABLE_PATH")
-
-        # Print data as a formatted table
-        print_table "$header" "$filtered_data"
+        # If all columns are valid, proceed
+        selected_headers=""
+        for col in "${cols[@]}"; do
+            col_trimmed=$(echo "$col" | xargs)  # Trim spaces
+            col_index=$(get_column_index "$col_trimmed" "$header")
+            if [ "$col_index" -ge 0 ]; then
+                header_col=$(echo "$header" | cut -d':' -f$((col_index+1)))
+                [ -z "$selected_headers" ] && selected_headers="$header_col" || selected_headers="$selected_headers:$header_col"
+            fi
+        done
+        selected_header="$selected_headers"
     else
-        echo -e "\n${YELLOW}All Data in Table '$table_name':${NC}"
-
-        # Get all data
-        all_data=$(cat "$TABLE_PATH")
-
-        # Print data as a formatted table
-        print_table "$header" "$all_data"
+        selected_header="$header"
     fi
 
+    # Initialize the main AWK command with filter conditions
+    filter_conditions=""
+    if [[ "$use_condition" == "y" || "$use_condition" == "Y" ]]; then
+        while true; do
+            read -p "Enter column name for condition (or 'done' to finish): " filter_column
+            [[ "$filter_column" == "done" ]] && break
+
+            # Trim spaces around filter column name
+            filter_column_trimmed=$(echo "$filter_column" | xargs)
+            
+            # Ensure the column exists
+            filter_col_index=$(get_column_index "$filter_column_trimmed" "$header")
+            if [ "$filter_col_index" -lt 0 ]; then
+                display_message "Column '$filter_column_trimmed' not found." "$YELLOW"
+                continue
+            fi
+            filter_col_index=$((filter_col_index + 1))
+
+            read -p "Enter operator (=, >, <, >=, <=): " filter_operator
+            read -p "Enter value: " filter_value
+
+            case "$filter_operator" in
+                "=")  condition="\$$filter_col_index == \"$filter_value\"" ;;
+                ">")  condition="\$$filter_col_index > \"$filter_value\"" ;;
+                "<")  condition="\$$filter_col_index < \"$filter_value\"" ;;
+                ">=") condition="\$$filter_col_index >= \"$filter_value\"" ;;
+                "<=") condition="\$$filter_col_index <= \"$filter_value\"" ;;
+                *) display_message "Invalid operator." "$RED"; continue ;;
+            esac
+
+            filter_conditions+=" && $condition"
+        done
+
+        filter_conditions=${filter_conditions# && }
+    fi
+
+    # First, apply filters on all fields if any
+    filtered_temp_file=$(mktemp)
+    if [ -n "$filter_conditions" ]; then
+        awk -F':' "BEGIN{OFS=\":\"} { if ($filter_conditions) print \$0 }" "$temp_file" > "$filtered_temp_file"
+    else
+        cp "$temp_file" "$filtered_temp_file"
+    fi
+
+    # Then, select specific columns if needed
+    if [ "$selected_cols" != "*" ]; then
+        column_selection=""
+        IFS=',' read -ra cols <<< "$selected_cols"
+        for col in "${cols[@]}"; do
+            col_trimmed=$(echo "$col" | xargs)  # Trim spaces
+            col_index=$(( $(get_column_index "$col_trimmed" "$header") + 1 ))
+            [ -z "$column_selection" ] && column_selection="\$$col_index" || column_selection="$column_selection,\$$col_index"
+        done
+        
+        result_temp_file=$(mktemp)
+        awk -F':' "BEGIN{OFS=\":\"} {print $column_selection}" "$filtered_temp_file" > "$result_temp_file"
+        filtered_data=$(cat "$result_temp_file")
+        rm "$result_temp_file"
+    else
+        filtered_data=$(cat "$filtered_temp_file")
+    fi
+
+    echo -e "\n${YELLOW}Query Results:${NC}"
+    print_table "$selected_header" "$filtered_data"
+
+    # Clean up temporary files
+    rm "$temp_file" "$filtered_temp_file"
     echo ""
-    echo "Press Enter to continue..."
-    read
+    read -p "Press Enter to continue..."
 }
 
 function update_table() {
@@ -81,42 +152,80 @@ function update_table() {
     read -p "Enter table name: " table_name
 
     # Check if table exists
-    if [ ! -f "$DATA_DIR/$CURRENT_DB/$table_name" ]; then
+    if ! find_table "$table_name"; then
         display_message "Table '$table_name' does not exist." "$RED"
         return
     fi
 
-    # Get the header row to show column names
-    header=$(head -n 1 "$DATA_DIR/$CURRENT_DB/$table_name")
-    echo -e "\n${YELLOW}Columns in table '$table_name':${NC}"
-    echo "$header" | tr ':' '\n' | nl
-
-    read -p "Enter column name to filter by: " filter_column
-    read -p "Enter value to match: " filter_value
-    read -p "Enter column name to update: " update_column
-    read -p "Enter new value: " new_value
-
-    # Validate columns exist
-    IFS=':' read -ra columns <<< "$header"
-
-    # Find filter column index
-    filter_col_index=-1
-    for i in "${!columns[@]}"; do
-        if [ "${columns[$i]}" = "$filter_column" ]; then
-            filter_col_index=$i
-            break
+    # Get column names from metadata
+    if [ -f "$METADATA_PATH" ]; then
+        header=$(get_column_names "$METADATA_PATH")
+        if [ $? -ne 0 ]; then
+            display_message "Could not read column names from metadata." "$RED"
+            return
         fi
-    done
-
-    if [ $filter_col_index -eq -1 ]; then
-        display_message "Filter column '$filter_column' not found in table '$table_name'." "$RED"
+    else
+        display_message "Metadata file not found for table '$table_name'." "$RED"
         return
     fi
 
-    # Find update column index
+    echo -e "\n${YELLOW}Columns in table '$table_name':${NC}"
+    display_columns "$header"
+
+    # Arrays for filter conditions
+    filter_columns=()
+    filter_operators=()
+    filter_values=()
+    filter_col_indices=()
+
+    read -p "Do you want to use multiple conditions? (y/n): " use_multi_filter
+
+    while true; do
+        read -p "Enter column name for condition (or 'done' to finish): " filter_column
+
+        [[ "$filter_column" == "done" ]] && break
+
+        read -p "Enter comparison operator (=, >, <, >=, <=): " filter_operator
+        read -p "Enter value: " filter_value
+
+        # Validate column existence
+        IFS=':' read -ra columns <<< "$header"
+        filter_col_index=-1
+        for i in "${!columns[@]}"; do
+            if [ "${columns[$i]}" == "$filter_column" ]; then
+                filter_col_index=$i
+                break
+            fi
+        done
+
+        if [ $filter_col_index -eq -1 ]; then
+            display_message "Column '$filter_column' not found in table '$table_name'." "$YELLOW"
+            continue
+        fi
+
+        # Add filter condition
+        filter_columns+=("$filter_column")
+        filter_operators+=("$filter_operator")
+        filter_values+=("$filter_value")
+        filter_col_indices+=("$filter_col_index")
+
+        echo -e "${GREEN}Filter added: '$filter_column' $filter_operator '$filter_value'${NC}"
+
+        [[ "$use_multi_filter" != "y" ]] && break
+    done
+
+    if [ ${#filter_columns[@]} -eq 0 ]; then
+        display_message "No conditions specified. Operation cancelled." "$YELLOW"
+        return
+    fi
+
+    read -p "Enter column name to update: " update_column
+    read -p "Enter new value: " new_value
+
+    # Validate update column existence
     update_col_index=-1
     for i in "${!columns[@]}"; do
-        if [ "${columns[$i]}" = "$update_column" ]; then
+        if [ "${columns[$i]}" == "$update_column" ]; then
             update_col_index=$i
             break
         fi
@@ -129,42 +238,50 @@ function update_table() {
 
     # Create a temporary file
     temp_file=$(mktemp)
-
-    # Keep track of updates
     updated_rows=0
 
-    # Process the file
+    # Read and update table
     while IFS= read -r line; do
         if [[ "$line" == "$header" ]]; then
-            # Write header to temp file unchanged
             echo "$line" > "$temp_file"
-        else
-            IFS=':' read -ra row_data <<< "$line"
-
-            if [ "${row_data[$filter_col_index]}" = "$filter_value" ]; then
-                # Update this row
-                row_data[$update_col_index]="$new_value"
-                updated_rows=$((updated_rows + 1))
-            fi
-
-            # Reconstruct the row
-            new_line=$(IFS=:; echo "${row_data[*]}")
-            echo "$new_line" >> "$temp_file"
+            continue
         fi
-    done < "$DATA_DIR/$CURRENT_DB/$table_name"
 
-    # Replace original file with temporary file
-    mv "$temp_file" "$DATA_DIR/$CURRENT_DB/$table_name"
+        IFS=':' read -ra row_data <<< "$line"
+        matches_all=true
+
+        for i in "${!filter_columns[@]}"; do
+            col_idx=${filter_col_indices[$i]}
+            filter_val=${filter_values[$i]}
+            operator=${filter_operators[$i]}
+
+            case "$operator" in
+                "=") [[ "${row_data[$col_idx]}" != "$filter_val" ]] && matches_all=false ;;
+                ">") [[ "${row_data[$col_idx]}" -le "$filter_val" ]] && matches_all=false ;;
+                "<") [[ "${row_data[$col_idx]}" -ge "$filter_val" ]] && matches_all=false ;;
+                ">=") [[ "${row_data[$col_idx]}" -lt "$filter_val" ]] && matches_all=false ;;
+                "<=") [[ "${row_data[$col_idx]}" -gt "$filter_val" ]] && matches_all=false ;;
+                *) matches_all=false ;;
+            esac
+
+            [[ "$matches_all" == false ]] && break
+        done
+
+        if [ "$matches_all" = true ]; then
+            row_data[$update_col_index]="$new_value"
+            updated_rows=$((updated_rows + 1))
+        fi
+
+        echo "${row_data[*]}" | tr ' ' ':' >> "$temp_file"
+    done < "$TABLE_PATH"
+
+    mv "$temp_file" "$TABLE_PATH"
 
     if [ $updated_rows -gt 0 ]; then
         display_message "$updated_rows row(s) updated successfully." "$GREEN"
     else
         display_message "No matching rows found. No updates made." "$YELLOW"
     fi
-
-    echo ""
-    echo "Press Enter to continue..."
-    read
 }
 
 insert_into_table() {

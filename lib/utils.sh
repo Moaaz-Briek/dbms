@@ -8,7 +8,7 @@ display_message() {
     local color="$2"
 
     printf "${color}${message}${NC}"
-    echo "Press Enter to continue..."
+    echo " Press Enter to continue..."
     read
 }
 
